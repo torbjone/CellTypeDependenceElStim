@@ -104,7 +104,7 @@ def check_existing_data(file_path, cell_name, frequency):
 
 
 def run_simulation_neuron_models(freq, soma_diam, dend_diam, upper_len, bottom_len, tstop, dt, cutoff,
-                                 local_E_field=1, directory='/Users/susannedahle/CellTypeDependenceElStim/simulation_data'):
+                                 local_E_field=1, directory='sim_results'):
     
     amp_data_file_path = os.path.join(directory, 'compare_Vm_sim_analytical.npy')
     

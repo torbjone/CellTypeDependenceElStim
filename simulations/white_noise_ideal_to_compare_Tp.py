@@ -133,7 +133,7 @@ def run_white_noise_ideal(tstop,
                              tvec,
                              t0_idx,
                              multipole_data_filename='compare_wn_ideal_tf',
-                             directory='/Users/susannedahle/CellTypeDependenceElStim/simulation_data'
+                             directory='sim_results'
                              ):
     
     multipole_data_filename = f'{multipole_data_filename}.npy'

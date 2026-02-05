@@ -9,11 +9,18 @@ import neuron
 import LFPy
 import brainsignals.neural_simulations as ns #From ElectricBrainSignals (Hagen and Ness 2023), see README
 
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
+
 import scipy.fftpack as ff
+root_folder = os.path.abspath('.')
 
 ns.load_mechs_from_folder(ns.cell_models_folder)
 np.random.seed(1534)
-
 
 
 def return_BBP_neuron(cell_name, tstop, dt):
@@ -88,22 +95,7 @@ def return_BBP_neuron(cell_name, tstop, dt):
     return cell
 
 
-# M matrices for dipole, quadrupole and octopole 
-
-def get_dipole_transformation_matrix(cell):     #From LFPy v.2.3.5
-        '''
-        Get linear response matrix
-
-        Returns
-        -------
-        response_matrix: ndarray
-            shape (3, n_seg) ndarray
-
-        Raises
-        ------
-        AttributeError
-            if ``cell is None``
-        '''
+def get_dipole_transformation_matrix(cell): #From LFPy v.2.3.5
         return np.stack([cell.x.mean(axis=-1),
                          cell.y.mean(axis=-1),
                          cell.z.mean(axis=-1)])
@@ -142,8 +134,7 @@ def get_negative_dipole_transformation_matrix(cell):
     return response_matrix, neg_indices
 
 
-
-def make_white_noise_stimuli(cell, input_idx, freqs, tvec, input_scaling=0.005):    #From ElectricBrainSignals (Hagen and Ness 2023), see README
+def make_white_noise_stimuli(cell, input_idx, freqs, tvec, input_scaling=0.005): #From ElectricBrainSignals (Hagen and Ness 2023), see README
 
     I = np.zeros(len(tvec))
 
@@ -168,15 +159,6 @@ def make_white_noise_stimuli(cell, input_idx, freqs, tvec, input_scaling=0.005):
     noise_vec.play(syn._ref_amp, cell.dt)
     return cell, syn, noise_vec 
 
-def check_existing_data(cdm_data, cell_name):
-    if cell_name in cdm_data:
-        if cell_name in cdm_data.keys():
-            return True
-    return False  
-
-def find_closest_indices(target_freqs, available_freqs):
-    return [np.argmin(np.abs(available_freqs - tf)) for tf in target_freqs]
-
 def return_freq_amp_phase(tvec, sig):
     """ Returns the amplitude, frequency and phase of the signal"""
     import scipy.fftpack as ff
@@ -199,61 +181,96 @@ def return_freq_amp_phase(tvec, sig):
     return freqs, amplitude, phase
 
 
+def check_existing_data(cdm_data, cell_name):
+    if cell_name in cdm_data:
+        if cell_name in cdm_data.keys():
+            return True
+    return False  
+
+def find_closest_indices(target_freqs, available_freqs):
+    return [np.argmin(np.abs(available_freqs - tf)) for tf in target_freqs]
+
+
+def remove_active_mechanisms(remove_list, cell):
+    # remove_list = ["Nap_Et2", "NaTa_t", "NaTs2_t", "SKv3_1",
+    # "SK_E2", "K_Tst", "K_Pst",
+    # "Im", "Ih", "CaDynamics_E2", "Ca_LVAst", "Ca", "Ca_HVA"]
+
+    import sys
+
+    mt = h.MechanismType(0)
+    mname = h.ref('')
+    for sec in h.allsec():
+        for mech in remove_list:
+            mt.select(mech)
+            mt.selected(mname)
+            if mname[0] == mech:
+                # print("Try to remove: ", mname[0])
+                mt.remove(sec=sec)
+
+    # for sec in h.allsec():
+    #     print(sec.name(), sec.psection()["density_mechs"].keys())
+
+    return cell
+
 
 def run_white_noise_stim(freqs, 
                          neurons,
-                         tvec,
-                         t0_idx,
-                         job_nr = None,
-                         cdm_data_filename='cdm_data_neocortical',
-                         plot_imem_filename = 'plot_imem',
+                         tstop, dt, cutoff
                          ):
-    
-    if job_nr is not None:
-        directory ='/mnt/SCRATCH/susandah/output/white_noise_25_nov'
-        cdm_data_filename = f'{cdm_data_filename}_{job_nr}.npy'
-        plot_imem_filename = f'{plot_imem_filename}_{job_nr}.npy' 
-    else: 
-        directory = '/Users/susannedahle/CellTypeDependenceElStim/simulation_data'
-        cdm_data_filename = f'{cdm_data_filename}.npy'
-        plot_imem_filename = f'{plot_imem_filename}.npy'
-        
-    cdm_data_file_path = os.path.join(directory, cdm_data_filename)
-    plot_imem_file_path = os.path.join(directory, plot_imem_filename)
-    failed_cells = []
-    
-    # Initialize or load existing data
-    if os.path.exists(cdm_data_file_path):
-        cdm_data = np.load(cdm_data_file_path, allow_pickle=True).item()
-        
-    else:
-        cdm_data = {}
-    
-    # Initialize or load existing data
-    if os.path.exists(plot_imem_file_path):
-        plot_imem_data = np.load(plot_imem_file_path, allow_pickle=True).item()
-    else:
-        plot_imem_data = {}
-    
+
+    directory = os.path.join(root_folder, 'sim_results')
+    n_tsteps_ = int((tstop + cutoff) / dt + 1)
+    t_ = np.arange(n_tsteps_) * dt
+
     for neuron_idx, cell_name in enumerate(neurons):
+        if not divmod(neuron_idx, size)[1] == rank:
+            continue
+
+        cdm_data_filename = f'cdm_data_neocortical_{cell_name}.npy'
+        plot_imem_filename = f'plot_imem_{cell_name}.npy'
+
+        cdm_data_file_path = os.path.join(directory, cdm_data_filename)
+        plot_imem_file_path = os.path.join(directory, plot_imem_filename)
+        failed_cells = []
+
+        # Initialize or load existing data
+        if os.path.exists(cdm_data_file_path):
+            cdm_data = np.load(cdm_data_file_path, allow_pickle=True).item()
+
+        else:
+            cdm_data = {}
+
+        # Initialize or load existing data
+        if os.path.exists(plot_imem_file_path):
+            plot_imem_data = np.load(plot_imem_file_path, allow_pickle=True).item()
+        else:
+            plot_imem_data = {}
+
         if check_existing_data(cdm_data, cell_name):
             print(f"Skipping {cell_name} (already exists in data)")
             continue
 
         try:
-            cell = return_BBP_neuron(cell_name, tstop=tstop, dt=dt)
+            cell = return_BBP_neuron(cell_name, tstop=tstop + cutoff, dt=dt)
 
             # Insert noise
-            cell, syn, noise_vec = make_white_noise_stimuli(cell, input_idx=0, freqs=freqs[freqs < 2200], tvec=tvec)
-            ns.remove_active_mechanisms(remove_list, cell)
+            cell, syn, noise_vec = make_white_noise_stimuli(cell, 0, freqs, t_)
+            cell = remove_active_mechanisms(remove_list, cell)
 
             # Run simulation
             cell.simulate(rec_imem=True, rec_vmem=True)
 
+            #cut_tvec = cell.tvec[cell.tvec > cutoff]
+            cell.vmem = cell.vmem[:, cell.tvec > cutoff]
+            cell.imem = cell.imem[:, cell.tvec > cutoff]
+            input_current = np.array(noise_vec)[cell.tvec > cutoff]
+
             # Cut initial segment
-            cell.vmem = cell.vmem[:, t0_idx:]
-            cell.imem = cell.imem[:, t0_idx:]
-            cell.tvec = cell.tvec[t0_idx:] - cell.tvec[t0_idx]
+            #cell.vmem = cell.vmem[:, t0_idx:]
+            #cell.imem = cell.imem[:, t0_idx:]
+            cell.tvec = cell.tvec[cell.tvec > cutoff]
+            cell.tvec -= cell.tvec[0]
 
             # ----- Compute dipole moment (z-component) -----
             cdm = get_dipole_transformation_matrix(cell) @ cell.imem
@@ -263,8 +280,6 @@ def run_white_noise_stim(freqs,
             freqs_s, amp_cdm_s, phase_cdm_s = return_freq_amp_phase(cell.tvec, cdm)
             
             #Find amplitude of input currents
-            input_current = np.array(noise_vec)
-            input_current = input_current[t0_idx:len(cdm)+t0_idx]
 
             freqs_input, amp_input_current, phase_input_current = return_freq_amp_phase(cell.tvec, input_current)
             cdm_per_input_current = amp_cdm_s / amp_input_current
@@ -307,7 +322,6 @@ def run_white_noise_stim(freqs,
             matched_amp_cdm_neg = amp_cdm_s_neg[0, closest_indices]
             matched_phase_cdm_neg = phase_cdm_s_neg[0, closest_indices]
             matched_cdm_per_input_current_neg = cdm_per_input_current_neg[0, closest_indices]
-
 
             # ----- Morph properties -----               
             upper_z_endpoint = cell.z.mean(axis=-1)[cell.get_closest_idx(z=10000)]
@@ -559,22 +573,19 @@ def run_white_noise_stim(freqs,
 
 
 if __name__=='__main__':
+
     ns.load_mechs_from_folder(ns.cell_models_folder)
+
+    bbp_mod_folder = join(join(ns.cell_models_folder, "bbp_mod"))
+    ns.load_mechs_from_folder(bbp_mod_folder)
 
     h = neuron.h
 
-    if len(sys.argv) > 1:
-        print('Retreiving external filepaths')
-        all_cells_folder = '/mnt/users/susandah/neuron_stimulation/all_cells_folder' #From the Blue Brain Project (Markram et al. 2015), see README
-        bbp_folder = os.path.abspath(all_cells_folder)                             
-        cell_models_folder = '/mnt/users/susandah/neuron_stimulation/brainsignals/cell_models' #From ElectricBrainSignals (Hagen and Ness 2023), see README
-        bbp_mod_folder = join(cell_models_folder, "bbp_mod")                       
-    else:
-        print('Retreive local filepath') 
-        all_cells_folder = '/Users/susannedahle/CellTypeDependenceElStim/simulations/all_cells_folder' #From the Blue Brain Project (Markram et al. 2015), see README
-        bbp_folder = os.path.abspath(all_cells_folder)                           
-        cell_models_folder = '/Users/susannedahle/CellTypeDependenceElStim/simulations/brainsignals/cell_models' #From ElectricBrainSignals (Hagen and Ness 2023), see README
-        bbp_mod_folder = join(cell_models_folder, "bbp_mod")   
+    all_cells_folder = join(root_folder, 'all_cells_folder') #From the Blue Brain Project (Markram et al. 2015), see README
+    bbp_folder = os.path.abspath(all_cells_folder)
+
+    cell_models_folder = join(root_folder, 'brainsignals', 'cell_models') #From ElectricBrainSignals (Hagen and Ness 2023), see README
+    bbp_mod_folder = join(cell_models_folder, "bbp_mod")
 
     # List to store the neuron names
     neurons = []
@@ -588,57 +599,28 @@ if __name__=='__main__':
                 neurons.append(folder_name)
     else:
         print(f"The directory {all_cells_folder} does not exist.")
+    #ns.compile_bbp_mechanisms()  # Compile once, before running jobs
 
     remove_list = ["Ca_HVA", "Ca_LVAst", "Ca", "CaDynamics_E2", 
                    "Ih", "Im", "K_Pst", "K_Tst", "KdShu2007", "Nap_Et2",
                    "NaTa_t", "NaTs2_t", "SK_E2", "SKv3_1", "StochKv"]
     
-    cut_off = 200
-    tstop = 2**12 + cut_off
+    tstop = 1000.
     dt = 2**-6
+    cutoff = 2000
 
     rate = 5000 # * Hz
 
     # Common setup
     num_tsteps = int(tstop / dt + 1)
     tvec = np.arange(num_tsteps) * dt
-    t0_idx = np.argmin(np.abs(tvec - cut_off))
+    #t0_idx = np.argmin(np.abs(tvec - cutoff))
 
-    sample_freq = ff.fftfreq(num_tsteps - t0_idx, d=dt / 1000)
-    pidxs = np.where(sample_freq >= 0)
-    freqs = sample_freq[pidxs]
+    freq1 = np.arange(1, 10, 1) # Shorter steplength in beginning
+    freq2 = np.arange(10, 100, 10)
+    freq3 = np.arange(100, 2200, 100) # Longer steplength to save calculation time
+    freqs = sorted(np.concatenate((freq1, freq2, freq3)))
+    #cdm_amp_dict = {}  # To store amplitude spectra for each cell
+    #imem_amp_dict = {}
 
-    cdm_amp_dict = {}  # To store amplitude spectra for each cell
-    imem_amp_dict = {}
-
-    neurons.sort()
-
-    if len(sys.argv) > 1:
-        idx = int(sys.argv[1])
-        job_nr = idx
-        print('Job ID given, running splitted jobs')
-        
-        if idx == 0:
-            neur_slice = neurons[:130]
-        elif idx == 1:
-            neur_slice = neurons[130:260]
-        elif idx == 2:
-            neur_slice = neurons[260:390]
-        elif idx == 3:
-            neur_slice = neurons[390:520]
-        elif idx == 4:
-            neur_slice = neurons[520:650]
-        elif idx == 5:
-            neur_slice = neurons[650:780]
-        elif idx == 6:
-            neur_slice = neurons[780:910]
-        else:
-            neur_slice = neurons[910:]
-        
-        run_white_noise_stim(freqs, neur_slice, tvec, t0_idx, job_nr = job_nr)
-
-    else:
-        print('No job ID, run one job')
-        run_white_noise_stim(freqs, neurons[:1], tvec, t0_idx)
-
-    
+    run_white_noise_stim(freqs, neurons, tstop, dt, cutoff)

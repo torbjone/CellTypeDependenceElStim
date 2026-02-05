@@ -1,7 +1,7 @@
 # Simulation code all neocortical neuron models from Blue Brain Project
 
 import os
-import sys
+import sys # If job split
 from os.path import join
 
 from glob import glob
@@ -11,11 +11,22 @@ import neuron
 import LFPy
 import brainsignals.neural_simulations as ns    #From ElectricBrainSignals (Hagen and Ness 2023), see README
 
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
+
 not_working_cells = []
 not_working_plot_cells = []
 
 
-def return_BBP_neuron(cell_name, tstop, dt):    #Adpted froam ElectricBrainSignals (Hagen and Ness 2023), see README
+root_folder = os.path.abspath('.')
+
+
+
+def return_BBP_neuron(cell_name, tstop, dt): #Adapted from ElectricBrainSignals (Hagen and Ness 2023), see README
 
     # load some required neuron-interface files
     neuron.h.load_file("stdrun.hoc")
@@ -26,7 +37,7 @@ def return_BBP_neuron(cell_name, tstop, dt):    #Adpted froam ElectricBrainSigna
     if not os.path.isdir(cell_folder):
         ns.download_BBP_model(cell_name)
 
-    neuron.load_mechanisms(bbp_mod_folder)
+    # neuron.load_mechanisms(bbp_mod_folder)
     os.chdir(cell_folder)
     add_synapses = False
     # get the template name
@@ -289,58 +300,79 @@ def run_Efield_stim_Ey(freq,
         print(f"Simulation with E-field in y direction complete for Neuron nr.{neuron_idx+1} of {len(neurons)} neurons\n")
 
 
-def run_Efield_stim_Ez(freq, 
-                        neurons,
-                        remove_list,
-                        tstop, 
-                        dt, 
-                        cutoff,
-                        job_nr = None,
-                        local_E_field=1,  # V/m
-                        directory='/mnt/SCRATCH/susandah/output/vmem_neo'):
-    
-    if job_nr is not None:
-        directory ='/mnt/SCRATCH/susandah/output/vmem_neo_25_nov'
-        amp_data_filename = f'vmem_amp_data_neo_Ez_{job_nr}.npy'
-        plot_data_filename = f'plot_data_neo_{job_nr}.npy'
-    else:
-        directory ='/Users/susannedahle/CellTypeDependenceElStim/simulation_data/vmem_data_neo'
-        amp_data_filename = f'vmem_amp_data_neo_Ez.npy'
-        plot_data_filename = f'plot_data_neo.npy'
+def remove_active_mechanisms(remove_list, cell):
+    # remove_list = ["Nap_Et2", "NaTa_t", "NaTs2_t", "SKv3_1",
+    # "SK_E2", "K_Tst", "K_Pst",
+    # "Im", "Ih", "CaDynamics_E2", "Ca_LVAst", "Ca", "Ca_HVA"]
 
-    amp_data_file_path = os.path.join(directory, amp_data_filename)
-    plot_data_file_path = os.path.join(directory, plot_data_filename)
-    
-    # Initialize or load existing data
-    if os.path.exists(amp_data_file_path):
-        amp_data = np.load(amp_data_file_path, allow_pickle=True).item()
-    else:
-        amp_data = {}
+    import sys
 
-    if os.path.exists(plot_data_file_path):
-        plot_data = np.load(plot_data_file_path, allow_pickle=True).item()
-    else:
-        plot_data = {}
+    mt = h.MechanismType(0)
+    mname = h.ref('')
+    for sec in h.allsec():
+        for mech in remove_list:
+            mt.select(mech)
+            mt.selected(mname)
+            if mname[0] == mech:
+                # print("Try to remove: ", mname[0])
+                mt.remove(sec=sec)
+
+    # for sec in h.allsec():
+    #     print(sec.name(), sec.psection()["density_mechs"].keys())
+
+    return cell
+
+
+def run_passive_simulation_Ez(freq,
+                              neurons,
+                              remove_list,
+                              tstop,
+                              dt,
+                              cutoff,
+                              # job_nr, if splitted jobs during sim
+                              local_E_field=1,  # V/m
+                              directory='simulation_data/vmem_data_neo'):
+
+    # amp_data_filename = f'vmem_amp_data_neo_Ez_{job_nr}.npy' # If splitted jobs
 
     local_ext_pot = np.vectorize(lambda x, y, z: local_E_field * z / 1000)
     n_tsteps_ = int((tstop + cutoff) / dt + 1)
     t_ = np.arange(n_tsteps_) * dt
-    #ns.compile_bbp_mechanisms(neurons[0]) # Compile once, before running jobs simultaneously
     
     for neuron_idx, cell_name in enumerate(neurons):
+        if not divmod(neuron_idx, size)[1] == rank:
+            continue
+
+        amp_data_filename = f'vmem_amp_data_neo_Ez_{cell_name}.npy'
+        amp_data_file_path = os.path.join(directory, amp_data_filename)
+        # plot_data_filename = f'plot_data_neo_{job_nr}.npy' # If splitted jobs
+        plot_data_filename = f'plot_data_neo_{cell_name}.npy'
+        plot_data_file_path = os.path.join(directory, plot_data_filename)
+
+        # Initialize or load existing data
+        if os.path.exists(amp_data_file_path):
+            amp_data = np.load(amp_data_file_path, allow_pickle=True).item()
+        else:
+            amp_data = {}
+
+        if os.path.exists(plot_data_file_path):
+            plot_data = np.load(plot_data_file_path, allow_pickle=True).item()
+        else:
+            plot_data = {}
+
         cell_failed_simulation = False
         cell_failed_plotting = False
         
-        for f in freq:
+        for f_i, f in enumerate(freq):
+
             if check_existing_data(amp_data, cell_name, f):
                 print(f"Skipping {cell_name} at {f} Hz (already exists in data)")
                 continue
             
             try:
-                cell = return_BBP_neuron(cell_name, tstop, dt)
-                ns.remove_active_mechanisms(remove_list, cell)
-                
-                cell.extracellular = True   
+
+                cell = return_BBP_neuron(cell_name, tstop + cutoff, dt)
+                cell.extracellular = True
                 for sec in cell.allseclist:
                     sec.insert("extracellular")
 
@@ -350,30 +382,40 @@ def run_Efield_stim_Ez(freq,
                     cell.z.mean(axis=-1)
                 ).reshape(cell.totnsegs, 1)
 
+
                 pulse = np.sin(2 * np.pi * f * t_ / 1000)
                 v_cell_ext = base_pot * pulse.reshape(1, n_tsteps_)
 
                 cell.insert_v_ext(v_cell_ext, t_)
+
+                cell = remove_active_mechanisms(remove_list, cell)
+                # cell = remove_active_mechanisms([], cell)
+
                 cell.simulate(rec_vmem=True)
 
                 # Calculate soma amp with fourier
-                cut_tvec = cell.tvec[cell.tvec > 2000]
-                cut_soma_vmem = cell.vmem[0, cell.tvec > 2000]
+                cut_tvec = cell.tvec[cell.tvec > cutoff]
+                cut_soma_vmem = cell.vmem[0, cell.tvec > cutoff]
                 freqs, vmem_amps = ns.return_freq_and_amplitude(cut_tvec, cut_soma_vmem)
+
                 freq_idx = np.argmin(np.abs(freqs - f))
-                store_freq = freqs[freq_idx]
+
+                if freqs[freq_idx] != f:
+                    raise RuntimeError("Frequency not as expected!")
+
                 soma_amp = vmem_amps[0, freq_idx]
 
-                # Distance from soma to closest endpoint                  
+                # Length and symmetry factor
                 upper_z_endpoint = cell.z.mean(axis=-1)[cell.get_closest_idx(z=10000)]
                 bottom_z_endpoint = cell.z.mean(axis=-1)[cell.get_closest_idx(z=-10000)]
                 closest_z_endpoint = min(upper_z_endpoint, abs(bottom_z_endpoint))
                 distant_z_endpoint = max(upper_z_endpoint, abs(bottom_z_endpoint))
-                total_z_len = closest_z_endpoint + distant_z_endpoint
 
+                total_z_len = closest_z_endpoint + distant_z_endpoint
                 symmetry_factor = closest_z_endpoint/distant_z_endpoint
                 asymmetry_factor = abs(upper_z_endpoint - abs(bottom_z_endpoint))/abs(upper_z_endpoint + abs(bottom_z_endpoint))
 
+                # Soma diam
                 soma_diam = cell.d[0]
 
                 # Dendrites in z-direction:
@@ -410,15 +452,16 @@ def run_Efield_stim_Ez(freq,
                         'avg_z_diam': avg_z_diam       
                     }
 
-                amp_data[cell_name]['freq'].append(store_freq)
+                amp_data[cell_name]['freq'].append(f)
                 amp_data[cell_name]['soma_amp'].append(soma_amp)
 
                 # Save amp data to .npy file
                 np.save(amp_data_file_path, amp_data)
                 print(f"Amplitude data has been saved to {os.path.abspath(amp_data_file_path)}")
                 
-            except:
+            except NotImplementedError:
                 cell_failed_simulation = True
+                print("FAILED!")
                 break
             
             if f in [10, 100, 1000]:
@@ -454,7 +497,7 @@ def run_Efield_stim_Ez(freq,
                     # Save plot data to .npy file
                     np.save(plot_data_file_path, plot_data)
                     print(f"Plot data has been saved to {os.path.abspath(plot_data_file_path)}")
-                    
+
                 except:
                     cell_failed_plotting = True
                     break
@@ -476,20 +519,16 @@ if __name__=='__main__':
 
     ns.load_mechs_from_folder(ns.cell_models_folder)
 
+    bbp_mod_folder = join(join(ns.cell_models_folder, "bbp_mod"))
+    ns.load_mechs_from_folder(bbp_mod_folder)
+
     h = neuron.h
 
-    if len(sys.argv) > 1:
-        print('Retreiving external filepaths')
-        all_cells_folder = '/mnt/users/susandah/neuron_stimulation/all_cells_folder' #From the Blue Brain Project (Markram et al. 2015), see README
-        bbp_folder = os.path.abspath(all_cells_folder)                             
-        cell_models_folder = '/mnt/users/susandah/neuron_stimulation/brainsignals/cell_models' #From ElectricBrainSignals (Hagen and Ness 2023), see README
-        bbp_mod_folder = join(cell_models_folder, "bbp_mod")                       
-    else:
-        print('Retreive local filepath') 
-        all_cells_folder = '/Users/susannedahle/CellTypeDependenceElStim/simulations/all_cells_folder' #From the Blue Brain Project (Markram et al. 2015), see README
-        bbp_folder = os.path.abspath(all_cells_folder)                           
-        cell_models_folder = '/Users/susannedahle/CellTypeDependenceElStim/simulations/brainsignals/cell_models' #From ElectricBrainSignals (Hagen and Ness 2023), see README
-        bbp_mod_folder = join(cell_models_folder, "bbp_mod")  
+    all_cells_folder = join(root_folder, 'all_cells_folder') #From the Blue Brain Project (Markram et al. 2015), see README
+    bbp_folder = os.path.abspath(all_cells_folder)
+
+    cell_models_folder = join(root_folder, 'brainsignals', 'cell_models') #From ElectricBrainSignals (Hagen and Ness 2023), see README
+    bbp_mod_folder = join(cell_models_folder, "bbp_mod")
 
     # List to store the neuron names
     neurons = []
@@ -503,70 +542,38 @@ if __name__=='__main__':
                 neurons.append(folder_name)
     else:
         print(f"The directory {all_cells_folder} does not exist.")
-
-    neurons.sort()
+    #ns.compile_bbp_mechanisms()  # Compile once, before running jobs
 
     remove_list = ["Ca_HVA", "Ca_LVAst", "Ca", "CaDynamics_E2", 
                    "Ih", "Im", "K_Pst", "K_Tst", "KdShu2007", "Nap_Et2",
                    "NaTa_t", "NaTs2_t", "SK_E2", "SKv3_1", "StochKv"]
-    
     # Simulation time 
-    tstop = 5000.
-    dt = 2**-4
+    tstop = 1000.
+    dt = 2**-6
 
-    cutoff = 1
+    cutoff = 2000
+    import scipy.fftpack as ff
+
+    n_tsteps_ = int((tstop) / dt)
+    t_ = np.arange(n_tsteps_) * dt
+    # sample_freq = ff.fftfreq(n_tsteps_, d=dt/1000)
+    # pidxs = np.where(sample_freq >= 0)
+    # freqs = sample_freq[pidxs]
+
+
+    # print(freqs)
 
     # El field frequency 
     freq1 = np.arange(1, 10, 1) # Shorter steplength in beginning
     freq2 = np.arange(10, 100, 10)
     freq3 = np.arange(100, 2200, 100) # Longer steplength to save calculation time
     freq = sorted(np.concatenate((freq1, freq2, freq3)))
+    #freq = np.array([2, 20, 40, 60, 200, 400, 600, 1200, 1400, 1600, 2000])
+    # freq = np.logspace(0, 2.2, 10)
 
-    if len(sys.argv) > 1: 
-        print('Job ID given, running splitted jobs')
-        idx = int(sys.argv[1])
-        job_nr = idx
-        
-        if idx == 0:
-            neur_slice = neurons[:65]
-        elif idx == 1:
-            neur_slice = neurons[65:130]
-        elif idx == 2:
-            neur_slice = neurons[130:195]
-        elif idx == 3:
-            neur_slice = neurons[195:260]
-        elif idx == 4:
-            neur_slice = neurons[260:325]
-        elif idx == 5:
-            neur_slice = neurons[325:390]
-        elif idx == 6:
-            neur_slice = neurons[390:455]
-        elif idx == 7:
-            neur_slice = neurons[455:520]
-        elif idx == 8:
-            neur_slice = neurons[520:585]
-        elif idx == 9:
-            neur_slice = neurons[585:650]
-        elif idx == 10:
-            neur_slice = neurons[650:715]
-        elif idx == 11:
-            neur_slice = neurons[715:780]
-        elif idx == 12:
-            neur_slice = neurons[780:845]
-        elif idx == 13:
-            neur_slice = neurons[845:910]
-        elif idx == 14:
-            neur_slice = neurons[910:975]
-        else:
-            neur_slice = neurons[975:]
-
-        run_Efield_stim_Ez(freq, neur_slice, remove_list, tstop, dt, cutoff, job_nr)
-        run_Efield_stim_Ex(freq, neur_slice, remove_list, tstop, dt, cutoff, job_nr)
-        run_Efield_stim_Ey(freq, neur_slice, remove_list, tstop, dt, cutoff, job_nr)
-    
-    else:
-        print('No job ID, run one job')
-        run_Efield_stim_Ex(freq, neurons[0:2], remove_list, tstop, dt, cutoff)
-        run_Efield_stim_Ey(freq, neurons[0:2], remove_list, tstop, dt, cutoff)
-        run_Efield_stim_Ez(freq, neurons[0:2], remove_list, tstop, dt, cutoff)
+    print(freq)
+    # Simulation for the first neuron, full list of neurons computationally expencive, reccomend to split like shown below
+    run_passive_simulation_Ez(freq, neurons, remove_list, tstop, dt, cutoff, directory="sim_results")
+    # run_passive_simulation_Ex(freq, neurons[:1], remove_list, tstop, dt, cutoff)
+    # run_passive_simulation_Ey(freq, neurons[:1], remove_list, tstop, dt, cutoff)
 
