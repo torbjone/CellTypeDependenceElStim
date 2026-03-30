@@ -237,7 +237,6 @@ def run_white_noise_stim(freqs,
         # Initialize or load existing data
         if os.path.exists(cdm_data_file_path):
             cdm_data = np.load(cdm_data_file_path, allow_pickle=True).item()
-
         else:
             cdm_data = {}
 
@@ -249,8 +248,18 @@ def run_white_noise_stim(freqs,
 
         if check_existing_data(cdm_data, cell_name):
             print(f"Skipping {cell_name} (already exists in data)")
-            continue
+            cell = return_BBP_neuron(cell_name, tstop=tstop + cutoff, dt=dt)
+            cdm_data[cell_name].update({'area': cell.area})
+            plot_imem_data[cell_name].update({'area': cell.area})
+            if 'area' in cdm_data.keys():
+                del cdm_data['area']
+            if 'area' in plot_imem_data.keys():
+                del plot_imem_data['area']
 
+            np.save(cdm_data_file_path, cdm_data)
+            np.save(plot_imem_file_path, plot_imem_data)
+            continue
+        sys.exit()
         try:
             cell = return_BBP_neuron(cell_name, tstop=tstop + cutoff, dt=dt)
 
@@ -480,6 +489,7 @@ def run_white_noise_stim(freqs,
             # Store data in dictionary
             cdm_data[cell_name] = {
                 'frequency': matched_freqs,
+                'area': cell.area,
                 'cdm': matched_amp_cdm,
                 'cdm_phase': matched_phase_cdm, 
                 'cdm_per_input_current': matched_cdm_per_input_current,
@@ -541,6 +551,7 @@ def run_white_noise_stim(freqs,
 
                 # Store in dictionary
                 plot_imem_data[cell_name] = {
+                    'area': cell.area,
                     'freqs': plot_freqs,
                     'x': cell.x.tolist(),
                     'z': cell.z.tolist(),

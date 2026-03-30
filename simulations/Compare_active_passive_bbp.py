@@ -22,8 +22,6 @@ root_folder = os.path.abspath('.')
 
 
 import scipy.fftpack as ff
-root_folder = os.path.abspath('.')
-
 ns.load_mechs_from_folder(ns.cell_models_folder)
 np.random.seed(1534)
 remove_list = ["Ca_HVA", "Ca_LVAst", "Ca", "CaDynamics_E2",
@@ -135,8 +133,8 @@ def run_Efield_stim_Ez(freq,
                         ):
 
     directory ='.'
-    amp_data_filename = f'vmem_amp_data_active_passive_bbp.npy'
-    plot_data_filename = f'plot_data_active_passive.npy'
+    amp_data_filename = f'vmem_amp_data_active_passive_bbp_Ih_test.npy'
+    plot_data_filename = f'plot_data_active_passive_Ih_test.npy'
 
     amp_data_file_path = os.path.join(directory, amp_data_filename)
     plot_data_file_path = os.path.join(directory, plot_data_filename)
@@ -161,7 +159,7 @@ def run_Efield_stim_Ez(freq,
         cell_failed_simulation = False
         cell_failed_plotting = False
 
-        cell_mechs = ['active', 'passive']
+        cell_mechs = ['active', 'passive', "no_Ih"]
 
         for cell_idx in range(len(cell_mechs)):
             cell_mech = cell_mechs[cell_idx]
@@ -176,6 +174,8 @@ def run_Efield_stim_Ez(freq,
                 cell = return_BBP_neuron(cell_name, tstop + cutoff, dt)
                 if cell_mech == 'passive':
                     ns.remove_active_mechanisms(remove_list, cell)
+                if cell_mech == 'no_Ih':
+                    ns.remove_active_mechanisms(["Ih", "Im"], cell)
 
                 cell.extracellular = True
                 for sec in cell.allseclist:
@@ -290,7 +290,8 @@ if __name__=='__main__':
     h = neuron.h
 
     # List to store the neuron names
-    neurons = ['L4_BP_bIR215_5', "L5_MC_bAC217_1", "L5_TTPC2_cADpyr232_3", "L5_NGC_bNAC219_5", 'L4_SS_cADpyr230_1']
+    #neurons = ['L4_BP_bIR215_5', "L5_MC_bAC217_1", "L5_TTPC2_cADpyr232_3", "L5_NGC_bNAC219_5", 'L4_SS_cADpyr230_1']
+    neurons = ["L5_NGC_bNAC219_5"]
 
     remove_list = ["Ca_HVA", "Ca_LVAst", "Ca", "CaDynamics_E2", 
                    "Ih", "Im", "K_Pst", "K_Tst", "KdShu2007", "Nap_Et2",
@@ -309,9 +310,10 @@ if __name__=='__main__':
     #t0_idx = np.argmin(np.abs(tvec - cutoff))
 
     freq1 = np.arange(1, 10, 1) # Shorter steplength in beginning
-    freq2 = np.arange(10, 100, 10)
-    freq3 = np.arange(100, 2200, 100) # Longer steplength to save calculation time
-    freqs = sorted(np.concatenate((freq1, freq2, freq3)))
-    run_Efield_stim_Ez(freqs, neurons, remove_list, tstop, dt, cutoff)
+
+    #freq2 = np.arange(10, 100, 10)
+    #freq3 = np.arange(100, 2200, 100) # Longer steplength to save calculation time
+    #freqs = sorted(np.concatenate((freq1, freq2, freq3)))
+    run_Efield_stim_Ez(freq1, neurons, remove_list, tstop, dt, cutoff)
 
 

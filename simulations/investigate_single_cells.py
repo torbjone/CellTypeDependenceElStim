@@ -205,7 +205,7 @@ tstop = 1000.
 dt = 2 ** -4
 cutoff = 1000
 
-
+k_scale = 0.21
 rate = 5000  # * Hz
 
 # Common setup
@@ -217,7 +217,7 @@ t_ = np.arange(int( (tstop + cutoff) / dt + 1)) * dt
 
 cell_name = 'L4_BP_bIR215_5'
 cell_name = "L5_MC_bAC217_1"
-cell_names = ['L4_BP_bIR215_5', "L5_MC_bAC217_1"]
+cell_names = ['L4_BP_bIR215_5', "L5_MC_bAC217_1",]# 'L4_SS_cADpyr230_1', "L5_TTPC2_cADpyr232_3", "L5_NGC_bNAC219_5"]
 
 sample_freq = ff.fftfreq(len(tvec), d=dt / 1000)
 
@@ -225,6 +225,7 @@ pidxs = np.where(sample_freq >= 0)
 stim_freqs = sample_freq[pidxs]
 
 homog_pas = False
+
 # homog_diam = True
 make_passive = True
 
@@ -236,23 +237,26 @@ short_cell_names = {
     'L4_SS_cADpyr230_1': 'L4 SS'
 }
 
+
+
+
 import matplotlib.pyplot as plt
 fig = plt.figure(figsize=[10, 4])
-fig.subplots_adjust(wspace=0.5, right=0.98, left=0.04, bottom=0.12, top=0.85)
+fig.subplots_adjust(wspace=0.5, right=0.98, left=0.04, bottom=0.12, top=0.78)
 #fig.suptitle(f"cell name: {cell_name}\nmake passive: {make_passive}\n homogeneous passive parms: {homog_pas}\n homogeneous diameter: {homog_diam}")
 ax0 = fig.add_subplot(141, aspect=1, frameon=False, xticks=[], yticks=[],
                       ylim=[-1100, 300])
 
 axd = fig.add_subplot(142, xlabel="diameter (µm)", ylabel="$z$ (µm)",
-                      ylim=[-1100, 300], xlim=[0, 8], title="variable (original) diameter")
+                      ylim=[-1100, 300], xlim=[0, 8], title="original diameters")
 axd2 = fig.add_subplot(143, xlabel="diameter (µm)", ylabel="$z$ (µm)",
                       ylim=[-1100, 300], xlim=[0, 8], title="uniform diameter")
 
 #ax1 = fig.add_subplot(243, xlabel="time (ms)", ylabel="soma $V_m$ (mV)")
 #ax2 = fig.add_subplot(247, xlabel="time (ms)", ylabel="$P_z$ (nAµm)")
 
-ax3 = fig.add_subplot(144, ylim=[1e-3, 0.04], xlim=[1, 2000],
-                      xlabel="frequency (Hz)", ylabel="amplitude $P_z$")
+ax3 = fig.add_subplot(144, xlim=[1, 2000],
+                      xlabel="frequency (Hz)", ylabel=r"soma $V_{\rm m}$ amplitude")
 
 cell_labels = {}
 cell_vmem_colors = {
@@ -266,93 +270,115 @@ cell_vmem_colors = {
 lines = []
 line_names = []
 
+
+
 for c_idx, cell_name in enumerate(cell_names):
-    for homog_diam in [True, False]:
-        homog_name = "uniform dendritic diameter" if homog_diam else "variable dendritic diameter"
-        sim_name = f"{short_cell_names[cell_name]}, {homog_name}"
+    for homog_pas in [False, True]:
+        for homog_diam in [False, True]:
 
-        line_style = '-' if not homog_diam else ':'
-        marker_style = 'o' if c_idx == 0 else 'x'
+            if homog_diam and homog_pas:
+                continue
+            homog_name = "uniform dendritic diameter" if homog_diam else "original dendritic diameter"
+            pas_name = r"uniform $g_{\rm pas}$" if homog_pas else r"original $g_{\rm pas}$"
 
-        clr = cell_vmem_colors[cell_name]
+            sim_name = f"{short_cell_names[cell_name]}, {homog_name}, {pas_name}"
 
-        cell = return_BBP_neuron(cell_name, tstop=tstop + cutoff, dt=dt)
+            if homog_diam:
+                line_style = ":"
+            elif homog_pas:
+                line_style = '--'
 
-
-        for sec in h.allsec():
-            if "soma" in sec.name():
-                d_ = 7.
             else:
-                d_ = 1.
-            for i in range(int(h.n3d(sec=sec))):
-                if homog_diam:
-                    pass
+                line_style = '-'
+
+            marker_style = 'o' if c_idx == 0 else 'x'
+
+            clr = cell_vmem_colors[cell_name]
+
+            cell = return_BBP_neuron(cell_name, tstop=tstop + cutoff, dt=dt)
+
+
+            for sec in h.allsec():
+                if "soma" in sec.name():
+                    d_ = 7.
                 else:
-                    d_ = h.diam3d(i, sec=sec) #* scale
-                h.pt3dchange(i, d_, sec=sec)
+                    d_ = 1.
+                for i in range(int(h.n3d(sec=sec))):
+                    if homog_diam:
+                        pass
+                    else:
+                        d_ = h.diam3d(i, sec=sec) #* scale
+                    h.pt3dchange(i, d_, sec=sec)
 
-        h.define_shape()
-        cell._collect_geometry()
+            h.define_shape()
+            cell._collect_geometry()
 
-        if homog_pas:
-            for sec in cell.allseclist:
-                for seg in sec:
-                    seg.g_pas = 1e-5
-                    seg.cm = 1
-                    sec.e_pas = -70
-                sec.Ra = 100
+            if homog_pas:
+                for sec in cell.allseclist:
+                    for seg in sec:
+                        if "dend[0]" in sec.name():
+                            orig_gpas = seg.g_pas
 
-        ax0.plot(cell.x.T.copy() + 300 * c_idx, cell.z.T.copy(), c=clr)
-        if homog_diam:
-            ax_ = axd2
-        else:
-            ax_ = axd
-        ax_.plot(cell.d, cell.z.mean(axis=1), ls='None', ms=6, marker=marker_style, c=clr)
+                for sec in cell.allseclist:
+                    for seg in sec:
+                        seg.g_pas = orig_gpas
+                        #seg.cm = 1
+                        #sec.e_pas = -70
+                    #sec.Ra = 100
 
-        print(f"Soma diam, mean diam: {cell_name, cell.d[0], np.mean(cell.d[1:])}")
+            ax0.plot(cell.x.T.copy() + 300 * c_idx, cell.z.T.copy(), c=clr)
+            if homog_diam:
+                ax_ = axd2
+            else:
+                ax_ = axd
+            ax_.plot(cell.d, cell.z.mean(axis=1), ls='None', ms=6, marker=marker_style, c=clr)
 
-        # freq1 = np.arange(1, 10, 5)  # Shorter steplength in beginning
-        # freq2 = np.arange(10, 100, 50)
-        # freq3 = np.arange(100, 2200, 500)  # Longer steplength to save calculation time
-
-        # freqs = sorted(np.concatenate((freq1, freq2, freq3)))
-
-        # Insert noise
-        cell, syn, noise_vec = make_white_noise_stimuli(cell, 0,
-                                                        stim_freqs, t_, 0.0001)
-        if make_passive:
-            cell = remove_active_mechanisms(remove_list, cell)
-
-        print(h.psection())
-
-        # Run simulation
-        cell.simulate(rec_imem=True, rec_vmem=True)
-
-        # cut_tvec = cell.tvec[cell.tvec > cutoff]
-        cell.vmem = cell.vmem[:, cell.tvec > cutoff]
-        cell.imem = cell.imem[:, cell.tvec > cutoff]
-        input_current = np.array(noise_vec)[cell.tvec > cutoff]
-        cell.tvec = cell.tvec[cell.tvec > cutoff]
-        cell.tvec -= cell.tvec[0]
-
-        # ----- Compute dipole moment (z-component) -----
-        cdm = get_dipole_transformation_matrix(cell) @ cell.imem
-        cdm = cdm[2, :]  # 2: z-cordinate, : all timestep
-
-        # Get frequency and amplitude of cdm
-        freqs_s, amp_cdm_s, phase_cdm_s = return_freq_amp_phase(cell.tvec, cdm)
-
-        #ax1.plot(cell.tvec, cell.vmem[0])
-        #ax2.plot(cell.tvec, cdm)
-        l, = ax3.loglog(freqs_s[1:], amp_cdm_s[0, 1:], ls=line_style, c=clr)
-
-        lines.append(l)
-        line_names.append(sim_name)
-
-        del cell
+            print(f"Soma diam, mean diam: {cell_name, cell.d[0], np.mean(cell.d[1:])}")
+            print(f"{cell_name}: top z: {np.max(cell.z.mean(axis=1))}; bottom z: {np.min(cell.z.mean(axis=1))}")
 
 
-fig.legend(lines, line_names, ncol=2, loc=(0.5,0.9), frameon=False)
+            # freq1 = np.arange(1, 10, 5)  # Shorter steplength in beginning
+            # freq2 = np.arange(10, 100, 50)
+            # freq3 = np.arange(100, 2200, 500)  # Longer steplength to save calculation time
+
+            # freqs = sorted(np.concatenate((freq1, freq2, freq3)))
+
+            # Insert noise
+            cell, syn, noise_vec = make_white_noise_stimuli(cell, 0,
+                                                            stim_freqs, t_)
+            if make_passive:
+                cell = remove_active_mechanisms(remove_list, cell)
+
+            print(h.psection())
+
+            # Run simulation
+            cell.simulate(rec_imem=True, rec_vmem=True)
+
+            # cut_tvec = cell.tvec[cell.tvec > cutoff]
+            cell.vmem = cell.vmem[:, cell.tvec > cutoff]
+            cell.imem = cell.imem[:, cell.tvec > cutoff]
+            input_current = np.array(noise_vec)[cell.tvec > cutoff]
+            cell.tvec = cell.tvec[cell.tvec > cutoff]
+            cell.tvec -= cell.tvec[0]
+
+            # ----- Compute dipole moment (z-component) -----
+            cdm = get_dipole_transformation_matrix(cell) @ cell.imem
+            cdm = cdm[2, :]  # 2: z-cordinate, : all timestep
+
+            # Get frequency and amplitude of cdm
+            freqs_s, amp_cdm_s, phase_cdm_s = return_freq_amp_phase(cell.tvec, cdm)
+
+            l, = ax3.loglog(freqs_s[1:], k_scale * amp_cdm_s[0, 1:], ls=line_style, c=clr)
+
+            lines.append(l)
+            line_names.append(sim_name)
+
+            del cell
+
+
+fig.legend(lines, line_names, ncol=2, loc=(0.2,0.85), frameon=False)
+mark_subplots(fig.axes, ypos=1.01)
 simplify_axes(fig.axes)
 
-plt.savefig(f"cdm_psd_comb_plot.pdf")
+plt.savefig(f"cdm_psd_comb_plot_hetro_pass_2.png")
+plt.savefig(f"cdm_psd_comb_plot_hetro_pass_2.pdf")

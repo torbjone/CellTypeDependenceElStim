@@ -12,7 +12,20 @@ h = neuron.h
 ns.load_mechs_from_folder(ns.cell_models_folder)
 
 
-def return_ideal_cell(tstop, dt, apic_soma_diam = 20, apic_dend_diam=2, apic_upper_len = 1000, apic_bottom_len = -200):
+def return_ideal_cell(tstop, dt, apic_soma_diam = 20, apic_dend_diam=2,
+                      apic_upper_len = 1000, apic_bottom_len = -200):
+
+    tot_n_segs = 599
+
+
+    nsegs_up = 500#int(tot_n_segs * np.abs(apic_upper_len) / (np.abs(apic_upper_len) + np.abs(apic_bottom_len)) )
+    nsegs_down = 100#tot_n_segs - nsegs_up
+
+
+    if np.abs(apic_upper_len / nsegs_up) - np.abs(apic_bottom_len / nsegs_down) > 1e-2:
+        print(apic_upper_len / nsegs_up, apic_bottom_len / nsegs_down)
+        raise RuntimeError("Dendritic compartments not equally long!")
+
     #Adapted from ElectricBrainSignals (Hagen and Ness 2023), see README
     h("forall delete_section()")
     h("""
@@ -56,8 +69,8 @@ def return_ideal_cell(tstop, dt, apic_soma_diam = 20, apic_dend_diam=2, apic_upp
     }
     proc geom_nseg() {
     soma[0] {nseg = 1}
-    dend[0] {nseg = 500}
-    dend[1] {nseg = 500}
+    dend[0] {nseg = %s}
+    dend[1] {nseg = %s}
     }
     proc biophys() {
     }
@@ -71,13 +84,15 @@ def return_ideal_cell(tstop, dt, apic_soma_diam = 20, apic_dend_diam=2, apic_upp
         Ra = 150.
         cm = 1.
         }
-    """ % (apic_soma_diam, apic_soma_diam, apic_dend_diam, apic_upper_len, apic_dend_diam, apic_dend_diam, apic_bottom_len, apic_dend_diam))
+    """ % (apic_soma_diam, apic_soma_diam, apic_dend_diam, apic_upper_len,
+           apic_dend_diam, apic_dend_diam, apic_bottom_len, apic_dend_diam, nsegs_up, nsegs_down))
     cell_params = {
                 'morphology': h.all,
                 'delete_sections': False,
                 'v_init': -70.,
                 'passive': False,
                 'nsegs_method': None,
+                'max_nsegs_length': 20,
                 'dt': dt,
                 'tstart': -100.,
                 'tstop': tstop,
@@ -212,9 +227,9 @@ def run_white_noise_imem(tstop,
                     i += 1
                     cell_name = f'BL_{bot_l}_UL_{up_l}_SD_{s_d}_DD_{d_d}'
 
-                    if check_existing_data(imem_data, cell_name):
-                        print(f"Skipping {cell_name} (already exists in data)")
-                        continue
+                    # if check_existing_data(imem_data, cell_name):
+                    #     print(f"Skipping {cell_name} (already exists in data)")
+                    #     continue
 
                     cell = return_ideal_cell(tstop, dt,
                                              apic_soma_diam=s_d,
@@ -240,12 +255,14 @@ def run_white_noise_imem(tstop,
                     cell.imem = cell.imem[:, t0_idx:]
                     cell.tvec = cell.tvec[t0_idx:] - cell.tvec[t0_idx]
 
-                    # Store data for targer frequencies 
-                    target_freqs = [5,10,50,100,500,1000]
+                    # Store data for target frequencies
+                    target_freqs = [1, 5,10,50,100,500,1000]
 
                     cdm = get_dipole_transformation_matrix(cell) @ cell.imem
                     cdm = cdm[2, :] # 2: z-cordinate, : all timestep
                     freqs_cdm, amp_cdm, phase_cdm = return_freq_amp_phase(cell.tvec, cdm)
+                    print(freqs_cdm)
+
                     cdm_amps = []
                     cdm_phases = []
                     for f in target_freqs:
@@ -357,6 +374,7 @@ def run_white_noise_imem(tstop,
                         'x': cell.x.tolist(),
                         'z': cell.z.tolist(),
                         'totnsegs': cell.totnsegs,
+                        'area': cell.area,
                         'tvec': cell.tvec.tolist(),
                         'imem_amps': imem_amplitudes_at_freqs, 
                         'imem_phases': imem_phases_at_freqs,
@@ -393,21 +411,25 @@ if __name__=='__main__':
     dend_diam_2 = np.array([2])
     soma_diam_2 = np.array([20])
 
-    cut_off = 200
-    tstop = 2**12 + cut_off
+    cut_off = 2**6
+
+    tstop = 2000 + cut_off
     dt = 2**-6
 
     rate = 5000 # * Hz
     freqs_limit = 10**4
 
     # Common setup
-    num_tsteps = int(tstop / dt + 1)
+    num_tsteps = int(tstop / dt)
     tvec = np.arange(num_tsteps) * dt
     t0_idx = np.argmin(np.abs(tvec - cut_off))
 
     sample_freq = ff.fftfreq(num_tsteps - t0_idx, d=dt / 1000)
     pidxs = np.where(sample_freq >= 0)
     freqs = sample_freq[pidxs]
+
+    print(freqs)
+    print(freqs[np.argmin(np.abs(freqs - 1))])
 
     run_white_noise_imem(tstop, dt,freqs, freqs_limit, soma_diam_1, dend_diam_1, upper_len_1, bottom_len_1, tvec, t0_idx)
     run_white_noise_imem(tstop, dt,freqs, freqs_limit, soma_diam_2, dend_diam_2, upper_len_2, bottom_len_2, tvec, t0_idx)
