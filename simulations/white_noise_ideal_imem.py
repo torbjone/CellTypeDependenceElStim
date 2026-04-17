@@ -19,7 +19,7 @@ def return_ideal_cell(tstop, dt, apic_soma_diam = 20, apic_dend_diam=2,
 
 
     nsegs_up = 500#int(tot_n_segs * np.abs(apic_upper_len) / (np.abs(apic_upper_len) + np.abs(apic_bottom_len)) )
-    nsegs_down = 100#tot_n_segs - nsegs_up
+    nsegs_down = 250#tot_n_segs - nsegs_up
 
 
     if np.abs(apic_upper_len / nsegs_up) - np.abs(apic_bottom_len / nsegs_down) > 1e-2:
