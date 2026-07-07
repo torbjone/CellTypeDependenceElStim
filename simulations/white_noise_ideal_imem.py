@@ -399,7 +399,6 @@ def run_white_noise_imem(tstop,
                     print(f"Simulation complete for neuron {cell_name}: nr.{i}")
 
 
-
 if __name__=='__main__':
     upper_len_1 = np.array([1000])
     bottom_len_1 = np.array([-500])
